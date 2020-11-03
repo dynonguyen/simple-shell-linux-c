@@ -1,19 +1,28 @@
 #include <stdio.h>
 #include <unistd.h>
-#include <string.h>
+#include <sys/wait.h>
+#include <sys/types.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <ctype.h>
-#include <sys/types.h>
-#include <sys/wait.h>
+#include <string.h>
+#include <fcntl.h>
+#include <errno.h>
 
 // ! Constant
 #define MAX_COMMAND_LENGTH 80
 #define PROMPT "tsh > "
 #define EXIT_COMMAND "exit"
 #define HISTORY_COMMAND "!!"
-#define NO_COMMAND_NOTIFICATION "No commands in history !"
-#define DELIM " \n\t\v\a\r\f"
+#define NO_COMMAND_NOTIFICATION "No commands in history."
+#define SPACE_DELIM " \n\t\v\a\r\f"
+#define REDIRECT_DELIM ">|<"
+
+//Note: Command types
+#define NORMAL_COMMAND 0
+#define INPUT_COMMAND 1
+#define OUTPUT_COMMAND 2
+#define PIPE_COMMAND 3
 
 // ! Command history
 char *historyCmd = NULL;
@@ -25,14 +34,14 @@ bool isSpace(char c)
 }
 
 // fn: Remove white space in command */
-void trim(char *str)
+char *trim(char *str)
 {
   //null string
   if (!str)
-    return;
+    return str;
   //empty string
   if (!(*str))
-    return;
+    return str;
 
   //left trim
   while (isSpace(*str))
@@ -44,6 +53,8 @@ void trim(char *str)
     ;
 
   ptr[1] = '\0';
+
+  return str;
 }
 
 // fn: Checks if there exists & at the end of the statement
@@ -83,7 +94,7 @@ void getCommand(char *command)
   command[strlen(command) - 1] = '\0';
 
   //remove excess white space
-  trim(command);
+  command = trim(command);
 
   //if the command # "!!" then save history command if command # NULL
   if (strcmp(command, HISTORY_COMMAND) != 0)
@@ -99,7 +110,7 @@ void getCommand(char *command)
     }
 }
 
-// fn: Token user command (ex: "ls -l" => ["ls", "-l"])
+// fn: Token the normal user command (ex: "ls -l" => ["ls", "-l"])
 char **tokenUserCommand(char *command)
 {
   if (command)
@@ -113,14 +124,14 @@ char **tokenUserCommand(char *command)
     }
     char **result = (char **)malloc((countWord + 2) * sizeof(char *));
 
-    char *token = strtok(command, DELIM);
+    char *token = strtok(command, SPACE_DELIM);
     int n = 0;
     // walk through other tokens
     while (token != NULL)
     {
       result[n] = (char *)malloc(strlen(token) * sizeof(char));
       strcpy(result[n++], token);
-      token = strtok(NULL, DELIM);
+      token = strtok(NULL, SPACE_DELIM);
     }
     result[n] = NULL;
 
@@ -129,11 +140,40 @@ char **tokenUserCommand(char *command)
   return NULL;
 }
 
-// fn: handle error
+// fn: Token the redirect user command (ex: "ls -l > in.txt" => ["ls -l", "in.txt"])
+char **tokenRedirectCommand(char *command)
+{
+  char **tokens = (char **)malloc(2 * sizeof(char *));
+  tokens[0] = trim(strtok(command, REDIRECT_DELIM));
+  tokens[1] = trim(strtok(NULL, REDIRECT_DELIM));
+  return tokens;
+}
+
+// fn: Handle error
 void handleError(const char *errorMessage)
 {
   perror(errorMessage);
   exit(0);
+}
+
+// fn: Check command type
+int commandType(char *command)
+{
+  for (int i = 0; i < strlen(command); i++)
+  {
+    switch (command[i])
+    {
+    case '>':
+      return OUTPUT_COMMAND;
+    case '<':
+      return INPUT_COMMAND;
+    case '|':
+      return PIPE_COMMAND;
+    default:
+      break;
+    }
+  }
+  return NORMAL_COMMAND;
 }
 
 // fn: Simple commands with child processes - Simple command with &
@@ -160,6 +200,62 @@ void execvpCommand(char *command, bool isAmpersand)
     {
       waitpid(pid, NULL, 0);
     }
+  }
+}
+
+// fn: Input redirection
+void execvpInputCommand(char *command, bool isAmpersand)
+{
+}
+
+// fn: Output redirection
+void execvpOutputCommand(char *command, bool isAmpersand)
+{
+  char **tokens = tokenRedirectCommand(command);
+
+  pid_t pid = fork();
+
+  //user command token
+  char **params = tokenUserCommand(tokens[0]);
+
+  //execute
+  if (pid == 0)
+  {
+    //open for writing only | Create file)
+    int fd = open(tokens[1], O_CREAT | O_TRUNC | O_WRONLY | O_EXCL);
+    if (fd < 0)
+    {
+      //if the file already existed then remove & try to create
+      if (errno == EEXIST)
+      {
+        remove(tokens[1]);
+        fd = open(tokens[1], O_CREAT | O_TRUNC | O_WRONLY | O_EXCL);
+        if (fd < 0)
+        {
+          printf("Error opening the file\n");
+          return;
+        }
+      }
+      else
+      {
+        printf("Error opening the file\n");
+        return;
+      }
+    }
+
+    //dup failed
+    if (dup2(fd, STDOUT_FILENO) < 0)
+      handleError("Dup2 Error");
+
+    execvp(params[0], params);
+    close(fd);
+    handleError("Error");
+  }
+  else if (pid < 0)
+    handleError("Error");
+  else if (!isAmpersand)
+  {
+    waitpid(pid, NULL, 0);
   }
 }
 
@@ -190,18 +286,38 @@ void mainShellLoop()
     {
       if (historyCmd)
       {
-        printf("history command: %s\n", historyCmd);
+        strcpy(command, historyCmd);
       }
       else
       {
         puts(NO_COMMAND_NOTIFICATION);
+        continue;
       }
     }
 
-    //exec command
+    //classify commands
     bool isAmpersand = isIncludeAmpersand(command);
+    int cmdType = commandType(command);
     removeAmpersand(command);
-    execvpCommand(command, isAmpersand);
+
+    //Execute the user command by type
+    switch (cmdType)
+    {
+    case NORMAL_COMMAND:
+      execvpCommand(command, isAmpersand);
+      break;
+    case INPUT_COMMAND:
+      tokenRedirectCommand(command);
+      break;
+    case OUTPUT_COMMAND:
+      execvpOutputCommand(command, isAmpersand);
+      break;
+    case PIPE_COMMAND:
+      tokenRedirectCommand(command);
+      break;
+    default:
+      break;
+    }
   }
 }
 
