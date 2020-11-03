@@ -4,32 +4,35 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
-//constant
+// ! Constant
 #define MAX_COMMAND_LENGTH 80
 #define PROMPT "tsh > "
 #define EXIT_COMMAND "exit"
 #define HISTORY_COMMAND "!!"
 #define NO_COMMAND_NOTIFICATION "No commands in history !"
+#define DELIM " \n\t\v\a\r\f"
 
-//command history
+// ! Command history
 char *historyCmd = NULL;
 
-/* checks if a character is a white space ? */
+// fn: Checks if a character is a white space ?
 bool isSpace(char c)
 {
   return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == '\v';
 }
 
-/* remove white space in command */
-char *trim(char *str)
+// fn: Remove white space in command */
+void trim(char *str)
 {
   //null string
   if (!str)
-    return NULL;
+    return;
   //empty string
   if (!(*str))
-    return str;
+    return;
 
   //left trim
   while (isSpace(*str))
@@ -41,47 +44,137 @@ char *trim(char *str)
     ;
 
   ptr[1] = '\0';
-
-  return str;
 }
 
-/* enter & get a user's command */
-char *getCommand()
+// fn: Checks if there exists & at the end of the statement
+bool isIncludeAmpersand(char *command)
 {
-  char command[MAX_COMMAND_LENGTH];
-  char *userCmd = fgets(command, sizeof(command), stdin);
-  userCmd[strlen(userCmd) - 1] = '\0';
+  if (command)
+  {
+    for (int i = strlen(command) - 1; i >= 0; i--)
+    {
+      char c = command[i];
+      if (!isSpace(c) && c != '\0')
+      {
+        if (c == '&')
+          return true;
+        return false;
+      }
+    }
+  }
+}
+
+// fn: Remove ampersand in user command (if exist) */
+void removeAmpersand(char *command)
+{
+  if (command)
+  {
+    char *ptr;
+    for (ptr = command + strlen(command) - 1; (ptr >= command) && (isSpace(*ptr) || *ptr == '&'); --ptr)
+      ;
+    ptr[1] = '\0';
+  }
+}
+
+// fn: Enter & get a user's command
+void getCommand(char *command)
+{
+  fgets(command, MAX_COMMAND_LENGTH, stdin);
+  command[strlen(command) - 1] = '\0';
 
   //remove excess white space
-  char *result = trim(userCmd);
+  trim(command);
 
   //if the command # "!!" then save history command if command # NULL
-  if (strcmp(result, HISTORY_COMMAND) != 0)
-    if (result[0] != '\0')
+  if (strcmp(command, HISTORY_COMMAND) != 0)
+    if (command[0] != '\0')
     {
       if (historyCmd)
       {
         free(historyCmd);
         historyCmd = NULL;
       }
-      historyCmd = (char *)malloc(strlen(result) + 1);
-      strcpy(historyCmd, result);
+      historyCmd = (char *)malloc(strlen(command) + 1);
+      strcpy(historyCmd, command);
     }
-
-  return result;
 }
 
-/* main shell loop */
+// fn: Token user command (ex: "ls -l" => ["ls", "-l"])
+char **tokenUserCommand(char *command)
+{
+  if (command)
+  {
+    //count space to know element number of result
+    int countWord = 0;
+    for (int i = 0; i < strlen(command) - 1; ++i)
+    {
+      if (isSpace(command[i]) && !isSpace(command[i + 1]))
+        ++countWord;
+    }
+    char **result = (char **)malloc((countWord + 2) * sizeof(char *));
+
+    char *token = strtok(command, DELIM);
+    int n = 0;
+    // walk through other tokens
+    while (token != NULL)
+    {
+      result[n] = (char *)malloc(strlen(token) * sizeof(char));
+      strcpy(result[n++], token);
+      token = strtok(NULL, DELIM);
+    }
+    result[n] = NULL;
+
+    return result;
+  }
+  return NULL;
+}
+
+// fn: handle error
+void handleError(const char *errorMessage)
+{
+  perror(errorMessage);
+  exit(0);
+}
+
+// fn: Simple commands with child processes - Simple command with &
+void execvpCommand(char *command, bool isAmpersand)
+{
+  pid_t pid = fork();
+  char **params = tokenUserCommand(command);
+
+  // case: child process then exec
+  if (pid == 0)
+  {
+    execvp(params[0], params);
+    handleError("Error");
+  }
+  // case: the fork failed
+  else if (pid < 0)
+    handleError("Error");
+  // case: parent process
+  else
+  {
+    // case: if included & then the parent and child processes will run concurrently
+    //else the parent must wait for the child
+    if (!isAmpersand)
+    {
+      waitpid(pid, NULL, 0);
+    }
+  }
+}
+
+// fn: Main shell loop
 void mainShellLoop()
 {
   while (1)
   {
-    //print
+    //print prompt command
     printf(PROMPT);
     fflush(stdout);
 
     //get the user's command has been trimmed
-    char *command = getCommand();
+    char *command = (char *)malloc(MAX_COMMAND_LENGTH);
+    getCommand(command);
 
     /* ----- handle command ----- */
     //Case: empty or null => skip
@@ -104,10 +197,15 @@ void mainShellLoop()
         puts(NO_COMMAND_NOTIFICATION);
       }
     }
+
+    //exec command
+    bool isAmpersand = isIncludeAmpersand(command);
+    removeAmpersand(command);
+    execvpCommand(command, isAmpersand);
   }
 }
 
-/* main function */
+/* Main function */
 int main()
 {
   mainShellLoop();
