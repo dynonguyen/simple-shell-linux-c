@@ -9,7 +9,7 @@
 #include <fcntl.h>
 #include <errno.h>
 
-// ! Constant
+// Constant
 #define MAX_COMMAND_LENGTH 80
 #define PROMPT "tsh > "
 #define EXIT_COMMAND "exit"
@@ -18,13 +18,13 @@
 #define SPACE_DELIM " \n\t\v\a\r\f"
 #define REDIRECT_DELIM ">|<"
 
-//Note: Command types
+// Command types
 #define NORMAL_COMMAND 0
 #define INPUT_COMMAND 1
 #define OUTPUT_COMMAND 2
 #define PIPE_COMMAND 3
 
-// ! Command history
+// Command history
 char *historyCmd = NULL;
 
 // fn: Checks if a character is a white space ?
