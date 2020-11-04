@@ -291,6 +291,65 @@ void execvpOutputCommand(char *command, bool isAmpersand)
   }
 }
 
+// fn: Two commands with a pipe
+void execvpPipeCommand(char *command, bool isAmparsand)
+{
+  char **tokens = tokenRedirectCommand(command);
+
+  // user command token
+  char **params_1 = tokenUserCommand(tokens[0]);
+  char **params_2 = tokenUserCommand(tokens[1]);
+
+  // file descriptors array
+  int filedes[2];
+  if (pipe(filedes) < 0)
+  {
+    perror("Pipe Error");
+    return;
+  }
+
+  // the parent process create the child process
+  pid_t pid_1, pid_2;
+  pid_1 = fork();
+
+  if (pid_1 < 0)
+    handleError("Fork Error");
+  else if (pid_1 == 0)
+  {
+    /* This child will also create another child process (which will execute less) 
+       and will establish a pipe between itself and the child process it creates. */
+    pid_2 = fork();
+
+    if (pid_2 == 0)
+    {
+      // the output of the filedes[0] serve as the input to the filedes[1]
+      close(filedes[1]);
+      dup2(filedes[0], STDIN_FILENO);
+      if (execvp(params_2[0], params_2))
+        handleError("Execute Error");
+      close(filedes[0]);
+    }
+    else if (pid_2 < 0)
+      handleError("Fork Error");
+
+    // the output of the filedes[0] serve as the input to the filedes[1]
+    close(filedes[0]);
+    dup2(filedes[1], STDOUT_FILENO);
+    close(filedes[1]);
+    if (execvp(params_1[0], params_1) < 0)
+      handleError("Error");
+  }
+
+  // parent proccess
+  close(filedes[1]);
+  close(filedes[0]);
+  if (!isAmparsand)
+  {
+    waitpid(pid_1, NULL, 0);
+    waitpid(pid_2, NULL, 0);
+  }
+}
+
 // fn: Main shell loop
 void mainShellLoop()
 {
@@ -345,7 +404,7 @@ void mainShellLoop()
       execvpOutputCommand(command, isAmpersand);
       break;
     case PIPE_COMMAND:
-      tokenRedirectCommand(command);
+      execvpPipeCommand(command, isAmpersand);
       break;
     default:
       break;
