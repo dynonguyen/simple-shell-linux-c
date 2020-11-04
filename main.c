@@ -206,6 +206,38 @@ void execvpCommand(char *command, bool isAmpersand)
 // fn: Input redirection
 void execvpInputCommand(char *command, bool isAmpersand)
 {
+  char **tokens = tokenRedirectCommand(command);
+
+  pid_t pid = fork();
+
+  //user command token
+  char **params = tokenUserCommand(tokens[0]);
+
+  //execute
+  if (pid == 0)
+  {
+    //open for writing only | Create file)
+    int fd = open(tokens[1], O_RDONLY);
+    if (fd < 0)
+    {
+      printf("Error opening the file\n");
+      return;
+    }
+
+    //dup failed
+    if (dup2(fd, STDIN_FILENO) < 0)
+      handleError("Dup2 Error");
+
+    execvp(params[0], params);
+    close(fd);
+    handleError("Error");
+  }
+  else if (pid < 0)
+    handleError("Error");
+  else if (!isAmpersand)
+  {
+    waitpid(pid, NULL, 0);
+  }
 }
 
 // fn: Output redirection
@@ -307,7 +339,7 @@ void mainShellLoop()
       execvpCommand(command, isAmpersand);
       break;
     case INPUT_COMMAND:
-      tokenRedirectCommand(command);
+      execvpInputCommand(command, isAmpersand);
       break;
     case OUTPUT_COMMAND:
       execvpOutputCommand(command, isAmpersand);
